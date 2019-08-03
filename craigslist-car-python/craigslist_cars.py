@@ -7,6 +7,9 @@ from collections import defaultdict
 import dateutil.parser
 from dateutil.relativedelta import relativedelta
 from datetime import datetime
+import collections
+import numpy as np
+import pandas as pd
 
 
 def print_request_response(url, request_response, verbose=False):
@@ -208,7 +211,7 @@ def filter_cars(cars, max_mileage, unallowed_conditions, num_weeks, verbose=Fals
             odometer = car.get("odometer")[0]
         else:
             odometer = -999
-            car['odometer'] = 'unable to scrape yet - view link until bug is fixed'
+            car['odometer'] = np.nan
         title = None
         if "title" in car:
             title = car.get("title")[0]
@@ -257,7 +260,7 @@ def main():
     parser = argparse.ArgumentParser(description="craigslist car finder", parents=())
     parser.add_argument("-c", "--city", default='sfbay', help='which city to search for')
     parser.add_argument("-d", "--sort_results", default='pricedsc', help='how to sort results')
-    parser.add_argument("-e", "--search_distance", default='30', help='maximum distance from search zip')
+    parser.add_argument("-e", "--search_distance", default='40', help='maximum distance from search zip')
     parser.add_argument("-f", "--postal", default='94610', help='search zip')
     parser.add_argument("-p", "--min_price", default='2000')
     parser.add_argument("-o", "--max_price", default='16000')
@@ -311,13 +314,70 @@ def main():
     filtered_cars = filter_cars(all_cars, args.max_auto_miles, args.blacklist_titles, args.week_range, verbose=verbose)
 
     print('\n\nfiltered_cars:')
+    final_car_attributes_list = []
     for i, car_attributes in enumerate(filtered_cars):
         print('\n\ncar #: {}'.format(i))
+        final_car_attributes_list.extend(car_attributes.keys())
         for key, value in car_attributes.items():
             if key == 'posting_body':
                 continue
             else:
                 print('key: {}; value: {}'.format(key, value))
+    final_car_attributes_list = list(set(final_car_attributes_list))
+    print('\n\nfinal_car_attributes_list:\n', final_car_attributes_list)
+
+    car_row_dict_list = []
+    for i, car_attributes in enumerate(filtered_cars):
+        car_row_dict = collections.OrderedDict()
+        for car_attribute in final_car_attributes_list:
+            print('\n\n******************')
+            print('car_attribute:', car_attribute)
+            print('car_attributes[car_attribute]:', car_attributes[car_attribute])
+            try:
+                if isinstance(car_attributes[car_attribute], str) or \
+                        car_attributes[car_attribute] != car_attributes[car_attribute]:
+                    print('treat as string')
+                    car_row_dict[car_attribute] = car_attributes[car_attribute]
+                else:
+                    try:
+                        print('treat as list')
+                        car_row_dict[car_attribute] = car_attributes[car_attribute][0]
+                    except IndexError as e:
+                        print('\ncar_attributes[car_attribute]:', car_attributes[car_attribute])
+                        print('str(e):', str(e))
+                        car_row_dict[car_attribute] = np.nan
+            except KeyError:
+                car_row_dict[car_attribute] = np.nan
+            print('car_row_dict[car_attribute]:', car_row_dict[car_attribute])
+        car_row_dict_list.append(car_row_dict)
+    df = pd.DataFrame.from_dict(car_row_dict_list)
+
+    def do_it(element):
+        element = element[21:25]
+        return element
+    df['model_make_year'] = df['posting_title'].apply(lambda element: do_it(element))
+
+    def do_it(element):
+        element = element.replace('\'', '\'\'\'').replace('\n', ' ').replace('favorite this post', '').\
+            replace('hide this posting        unhide', '').strip()
+        return element
+    df['posting_title'] = df['posting_title'].apply(lambda element: do_it(element))
+
+    def do_it(element):
+        element = element.replace('\'', '\'\'\'').replace('\n', ' ').replace('QR Code Link to This Post', '').strip()
+        return element
+    df['posting_body'] = df['posting_body'].apply(lambda element: do_it(element))
+
+    print(df.columns)
+    df = df[['model_make_year', 'odometer', 'price', 'time_posted', 'fuel', 'condition', 'transmission', 'title status', 'url',
+             'posting_title', 'drive', 'cylinders', 'VIN', 'type', 'size', 'paint color', 'attribute']]  # ,
+             # 'posting_body']]
+
+    df.sort_values(by=['model_make_year', 'odometer', 'price', 'time_posted'], inplace=True)
+
+    with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+        print('\n\ndf.head():\n', df.head())
+    df.to_csv('results.csv')
 
 
 if __name__ == "__main__":
